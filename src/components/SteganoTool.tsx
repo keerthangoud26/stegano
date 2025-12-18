@@ -1,42 +1,82 @@
 import { useState, useCallback, useEffect } from "react";
-import { Shield, Lock, Unlock, Download, Terminal, Zap, AlertTriangle } from "lucide-react";
+import { Shield, Lock, Unlock, Download, Terminal, Zap, AlertTriangle, Image, Video, Music, FileText } from "lucide-react";
 import { Button } from "./ui/button";
 import CyberCard from "./CyberCard";
 import FileDropZone from "./FileDropZone";
 import MessageInput from "./MessageInput";
-import { encodeMessage, decodeMessage, getImageCapacity } from "@/lib/steganography";
+import { 
+  encodeMessage, 
+  decodeMessage, 
+  getImageCapacity,
+  getAudioCapacity,
+  getVideoCapacity,
+  getTextCapacity,
+  MediaType 
+} from "@/lib/steganography";
 import { toast } from "@/hooks/use-toast";
 
 type Mode = "encode" | "decode";
 
+const mediaConfigs: { type: MediaType; icon: React.ReactNode; label: string; accept: string; extension: string }[] = [
+  { type: 'image', icon: <Image className="w-4 h-4" />, label: 'Image', accept: 'image/png,image/jpeg,image/webp', extension: '.png' },
+  { type: 'video', icon: <Video className="w-4 h-4" />, label: 'Video', accept: 'video/mp4,video/webm', extension: '.png' },
+  { type: 'audio', icon: <Music className="w-4 h-4" />, label: 'Audio', accept: 'audio/wav', extension: '.wav' },
+  { type: 'text', icon: <FileText className="w-4 h-4" />, label: 'Text', accept: 'text/plain,.txt', extension: '.txt' },
+];
+
 const SteganoTool = () => {
   const [mode, setMode] = useState<Mode>("encode");
+  const [mediaType, setMediaType] = useState<MediaType>("image");
   const [file, setFile] = useState<File | null>(null);
+  const [textContent, setTextContent] = useState<string>("");
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [message, setMessage] = useState("");
   const [password, setPassword] = useState("");
-  const [imageInfo, setImageInfo] = useState<{ width: number; height: number; maxChars: number } | null>(null);
+  const [fileInfo, setFileInfo] = useState<string>("");
+  const [maxChars, setMaxChars] = useState<number>(0);
   const [isProcessing, setIsProcessing] = useState(false);
   const [resultBlob, setResultBlob] = useState<Blob | null>(null);
+  const [resultText, setResultText] = useState<string | null>(null);
   const [decodedMessage, setDecodedMessage] = useState<string | null>(null);
+
+  const currentConfig = mediaConfigs.find(m => m.type === mediaType)!;
 
   const handleFileSelect = useCallback(async (selectedFile: File) => {
     setFile(selectedFile);
     setResultBlob(null);
+    setResultText(null);
     setDecodedMessage(null);
     
-    // Create preview URL
-    const url = URL.createObjectURL(selectedFile);
-    setPreviewUrl(url);
-    
-    // Get image capacity
     try {
-      const info = await getImageCapacity(selectedFile);
-      setImageInfo(info);
+      if (mediaType === 'image') {
+        const url = URL.createObjectURL(selectedFile);
+        setPreviewUrl(url);
+        const info = await getImageCapacity(selectedFile);
+        setMaxChars(info.maxChars);
+        setFileInfo(`${info.width}×${info.height}px`);
+      } else if (mediaType === 'video') {
+        const url = URL.createObjectURL(selectedFile);
+        setPreviewUrl(url);
+        const info = await getVideoCapacity(selectedFile);
+        setMaxChars(info.maxChars);
+        setFileInfo(`${info.width}×${info.height}px • ${info.duration.toFixed(1)}s`);
+      } else if (mediaType === 'audio') {
+        setPreviewUrl(null);
+        const info = await getAudioCapacity(selectedFile);
+        setMaxChars(info.maxChars);
+        setFileInfo(`${info.duration.toFixed(1)}s duration`);
+      } else if (mediaType === 'text') {
+        setPreviewUrl(null);
+        const text = await selectedFile.text();
+        setTextContent(text);
+        const info = getTextCapacity(text);
+        setMaxChars(info.maxChars);
+        setFileInfo(`${info.wordCount} words`);
+      }
     } catch (error) {
-      console.error("Failed to get image info:", error);
+      console.error("Failed to get file info:", error);
     }
-  }, []);
+  }, [mediaType]);
 
   const handleClear = useCallback(() => {
     if (previewUrl) {
@@ -44,14 +84,26 @@ const SteganoTool = () => {
     }
     setFile(null);
     setPreviewUrl(null);
-    setImageInfo(null);
+    setTextContent("");
+    setFileInfo("");
+    setMaxChars(0);
     setResultBlob(null);
+    setResultText(null);
     setDecodedMessage(null);
   }, [previewUrl]);
 
+  const handleMediaTypeChange = (type: MediaType) => {
+    handleClear();
+    setMediaType(type);
+  };
+
   const handleEncode = async () => {
-    if (!file) {
-      toast({ title: "Error", description: "Please select an image first", variant: "destructive" });
+    if (mediaType !== 'text' && !file) {
+      toast({ title: "Error", description: "Please select a file first", variant: "destructive" });
+      return;
+    }
+    if (mediaType === 'text' && !textContent) {
+      toast({ title: "Error", description: "Please load a text file first", variant: "destructive" });
       return;
     }
     if (!message.trim()) {
@@ -65,8 +117,17 @@ const SteganoTool = () => {
 
     setIsProcessing(true);
     try {
-      const blob = await encodeMessage(file, message, password);
-      setResultBlob(blob);
+      const input = mediaType === 'text' ? textContent : file!;
+      const result = await encodeMessage(input, message, password, mediaType);
+      
+      if (typeof result === 'string') {
+        setResultText(result);
+        setResultBlob(null);
+      } else {
+        setResultBlob(result);
+        setResultText(null);
+      }
+      
       toast({ 
         title: "Success", 
         description: "Message encrypted and hidden! Click Download to save.",
@@ -83,8 +144,12 @@ const SteganoTool = () => {
   };
 
   const handleDecode = async () => {
-    if (!file) {
-      toast({ title: "Error", description: "Please select an image first", variant: "destructive" });
+    if (mediaType !== 'text' && !file) {
+      toast({ title: "Error", description: "Please select a file first", variant: "destructive" });
+      return;
+    }
+    if (mediaType === 'text' && !textContent) {
+      toast({ title: "Error", description: "Please load a text file first", variant: "destructive" });
       return;
     }
     if (!password) {
@@ -94,7 +159,8 @@ const SteganoTool = () => {
 
     setIsProcessing(true);
     try {
-      const decoded = await decodeMessage(file, password);
+      const input = mediaType === 'text' ? textContent : file!;
+      const decoded = await decodeMessage(input, password, mediaType);
       setDecodedMessage(decoded);
       setMessage(decoded);
       toast({ 
@@ -113,21 +179,30 @@ const SteganoTool = () => {
   };
 
   const handleDownload = () => {
-    if (!resultBlob) return;
-    
-    const url = URL.createObjectURL(resultBlob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `stego_${Date.now()}.png`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-    
-    toast({ title: "Downloaded", description: "Steganographic image saved!" });
+    if (resultBlob) {
+      const url = URL.createObjectURL(resultBlob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `stego_${mediaType}_${Date.now()}${currentConfig.extension}`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      toast({ title: "Downloaded", description: "Steganographic file saved!" });
+    } else if (resultText) {
+      const blob = new Blob([resultText], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `stego_text_${Date.now()}.txt`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      toast({ title: "Downloaded", description: "Steganographic text file saved!" });
+    }
   };
 
-  // Cleanup preview URL on unmount
   useEffect(() => {
     return () => {
       if (previewUrl) {
@@ -140,7 +215,7 @@ const SteganoTool = () => {
     <div className="min-h-screen bg-cyber-gradient relative overflow-hidden">
       {/* Header */}
       <header className="relative z-10 py-6 px-4 border-b border-border/50">
-        <div className="max-w-6xl mx-auto flex items-center justify-between">
+        <div className="max-w-6xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             <div className="relative">
               <Shield className="w-10 h-10 text-primary" />
@@ -151,7 +226,7 @@ const SteganoTool = () => {
                 STEGANO<span className="text-secondary">CRYPT</span>
               </h1>
               <p className="text-xs text-muted-foreground font-mono tracking-widest">
-                SECURE STEGANOGRAPHY TOOLKIT v2.0
+                UNIVERSAL STEGANOGRAPHY TOOLKIT v2.0
               </p>
             </div>
           </div>
@@ -182,14 +257,38 @@ const SteganoTool = () => {
 
       {/* Main content */}
       <main className="relative z-10 max-w-6xl mx-auto p-4 md:p-6">
+        {/* Media Type Selector */}
+        <div className="mb-6">
+          <CyberCard title="Select Medium" variant="terminal">
+            <div className="p-4">
+              <div className="grid grid-cols-4 gap-2">
+                {mediaConfigs.map(({ type, icon, label }) => (
+                  <button
+                    key={type}
+                    onClick={() => handleMediaTypeChange(type)}
+                    className={`flex flex-col items-center gap-2 p-3 rounded-lg border transition-all ${
+                      mediaType === type
+                        ? "border-primary bg-primary/10 text-primary shadow-cyber-glow"
+                        : "border-border/50 hover:border-primary/50 text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    {icon}
+                    <span className="font-mono text-xs">{label}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </CyberCard>
+        </div>
+
         {/* Info banner */}
         <div className="mb-6 p-4 rounded-lg bg-primary/5 border border-primary/30 flex items-start gap-3">
           <Terminal className="w-5 h-5 text-primary flex-shrink-0 mt-0.5" />
           <div>
             <p className="text-sm text-foreground">
               {mode === "encode" 
-                ? "Hide encrypted messages within images using LSB steganography. The resulting image looks identical to the original."
-                : "Extract and decrypt hidden messages from steganographic images. Requires the correct decryption key."
+                ? `Hide encrypted messages within ${mediaType} files using LSB steganography. ${mediaType === 'video' ? 'Note: Output is first frame as PNG.' : ''}`
+                : `Extract and decrypt hidden messages from steganographic ${mediaType} files. Requires the correct decryption key.`
               }
             </p>
           </div>
@@ -197,15 +296,18 @@ const SteganoTool = () => {
 
         {/* Main grid */}
         <div className="grid lg:grid-cols-2 gap-6">
-          {/* Left panel - Image */}
-          <CyberCard title="Image Carrier" variant="glow" className="h-[450px]">
+          {/* Left panel - File */}
+          <CyberCard title={`${mediaType.charAt(0).toUpperCase() + mediaType.slice(1)} Carrier`} variant="glow" className="h-[450px]">
             <div className="p-4 h-[calc(100%-40px)]">
               <FileDropZone
                 onFileSelect={handleFileSelect}
                 file={file}
                 previewUrl={previewUrl}
                 onClear={handleClear}
-                imageInfo={imageInfo}
+                accept={currentConfig.accept}
+                mediaType={mediaType}
+                fileInfo={fileInfo}
+                maxChars={maxChars}
               />
             </div>
           </CyberCard>
@@ -222,7 +324,7 @@ const SteganoTool = () => {
                 setMessage={setMessage}
                 password={password}
                 setPassword={setPassword}
-                maxChars={mode === "encode" ? imageInfo?.maxChars : undefined}
+                maxChars={mode === "encode" ? maxChars : undefined}
               />
             </div>
           </CyberCard>
@@ -236,7 +338,7 @@ const SteganoTool = () => {
                 variant="encode"
                 size="xl"
                 onClick={handleEncode}
-                disabled={isProcessing || !file || !message || !password}
+                disabled={isProcessing || (!file && !textContent) || !message || !password}
                 className="w-full sm:w-auto gap-2"
               >
                 {isProcessing ? (
@@ -252,7 +354,7 @@ const SteganoTool = () => {
                 )}
               </Button>
               
-              {resultBlob && (
+              {(resultBlob || resultText) && (
                 <Button
                   variant="cyber"
                   size="xl"
@@ -269,7 +371,7 @@ const SteganoTool = () => {
               variant="decode"
               size="xl"
               onClick={handleDecode}
-              disabled={isProcessing || !file || !password}
+              disabled={isProcessing || (!file && !textContent) || !password}
               className="w-full sm:w-auto gap-2"
             >
               {isProcessing ? (
@@ -313,7 +415,10 @@ const SteganoTool = () => {
             <p className="font-display uppercase tracking-wider mb-1 text-foreground/80">Security Notice</p>
             <p>
               All encryption happens locally in your browser. No data is sent to any server. 
-              Use PNG format for lossless encoding. JPEG compression may corrupt hidden data.
+              {mediaType === 'image' && ' Use PNG format for lossless encoding. JPEG compression may corrupt hidden data.'}
+              {mediaType === 'audio' && ' Only WAV format is supported for audio steganography.'}
+              {mediaType === 'video' && ' Video output is first frame as PNG to preserve hidden data.'}
+              {mediaType === 'text' && ' Hidden data is encoded using whitespace characters.'}
             </p>
           </div>
         </div>
@@ -323,7 +428,7 @@ const SteganoTool = () => {
       <footer className="relative z-10 py-4 px-4 mt-8 border-t border-border/30">
         <div className="max-w-6xl mx-auto flex items-center justify-center gap-2 text-xs text-muted-foreground">
           <Shield className="w-3 h-3" />
-          <span className="font-mono">STEGANOCRYPT // LSB STEGANOGRAPHY + XOR ENCRYPTION</span>
+          <span className="font-mono">STEGANOCRYPT // UNIVERSAL STEGANOGRAPHY + XOR ENCRYPTION</span>
         </div>
       </footer>
 
