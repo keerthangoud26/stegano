@@ -164,7 +164,8 @@ const SteganoTool = () => {
       const input = mediaType === 'text' ? textContent : file!;
       const decoded = await decodeMessage(input, password, mediaType);
       setDecodedMessage(decoded);
-      setMessage(decoded);
+      setMessage("");
+      setPassword("");
       toast({ 
         title: "Decryption Successful", 
         description: "Hidden message revealed!",
