@@ -130,6 +130,12 @@ const SteganoTool = () => {
       
       setMessage("");
       setPassword("");
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+      setFile(null);
+      setPreviewUrl(null);
+      setTextContent("");
+      setFileInfo("");
+      setMaxChars(0);
       toast({ 
         title: "Success", 
         description: "Message encrypted and hidden! Click Download to save.",
